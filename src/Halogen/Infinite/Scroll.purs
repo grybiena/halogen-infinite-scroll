@@ -1,4 +1,4 @@
-module Halogen.Infinite.Scroll (class FeedOrder, feedOrder, class Feed, ScrollFeed(..), element, onElement, feedAbove, feedBelow, feedInsert, feedDelete, FeedParams,defaultFeedParams,component, Page, findBucket) where
+module Halogen.Infinite.Scroll (class FeedOrder, feedOrder, class Feed, ScrollFeed(..), element, onElement, feedAbove, feedBelow, feedInsert, feedDelete, FeedParams,defaultFeedParams,component ) where
 
 import Prelude hiding (top, bottom)
 
