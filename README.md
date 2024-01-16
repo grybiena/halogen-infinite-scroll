@@ -6,3 +6,4 @@ Supports bi-directional scrolling (loading and unloading from above and below) v
 
 Excess content above and below the visible section of the feed is garbage collected from the DOM.
 
+[See example.](https://grybiena.github.io/halogen-infinite-scroll-example/index.html)
