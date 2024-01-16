@@ -1,0 +1,27 @@
+{
+  "dependencies": {
+    "purescript-css": "^v6.0.0",
+    "purescript-halogen": "^v7.0.0",
+    "purescript-halogen-css": "^v10.0.0",
+    "purescript-halogen-subscriptions": "https://github.com/purescript-halogen/purescript-halogen-subscriptions.git#v2.0.0",
+    "purescript-intersection-observer": "https://github.com/grybiena/intersection-observer.git#v1.0.1",
+    "purescript-mmorph": "^v7.0.0",
+    "purescript-pipes": "^v8.0.0",
+    "purescript-resize-observer": "https://github.com/grybiena/resize-observer.git#v1.0.0",
+    "purescript-resourcet": "https://github.com/robertdp/purescript-resourcet.git#v1.0.0"
+  },
+  "ignore": [
+    "**/.*",
+    "node_modules",
+    "bower_components",
+    "output"
+  ],
+  "license": [
+    "MIT"
+  ],
+  "name": "purescript-halogen-infinite-scroll",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/grybiena/halogen-infinite-scroll.git"
+  }
+}
