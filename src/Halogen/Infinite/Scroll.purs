@@ -71,7 +71,7 @@ defaultFeedParams e =
   , pageSize: 10
   , hiddenPages: 3
   , preloadedPages: 3 
-  , enableTop: true
+  , enableTop: false 
   , preloadMillis: 333.3
   }
 
