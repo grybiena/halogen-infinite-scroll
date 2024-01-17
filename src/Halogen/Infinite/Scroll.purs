@@ -157,7 +157,7 @@ handleFeedAction InitializeFeed = do
     initializeFeed feed = do
       H.raise $ ScrollFeed $ \n -> do
         t <- scrollTop feed
-        setScrollTop (t - n) feed
+        setScrollTop (t + n) feed
       zerothPage <- loadInitialPage feed
       H.modify_ (\st -> st {
           pages = Map.singleton 0 zerothPage
