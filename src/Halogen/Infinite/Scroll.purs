@@ -67,14 +67,14 @@ component =
                           , lock: Nothing
                           , update: { topLoad: Nothing, bottomLoad: Nothing, scroll: Nothing }
                           }
-    , render: renderFeed
+    , render
     , eval: H.mkEval $ H.defaultEval { handleAction = handleAction
                                      , handleQuery = handleQuery
                                      , initialize = Just InitializeFeed
                                      }
     }
 
-type FeedSlots e = ( page :: H.Slot (Page.Query e) Page.Output Int )
+type Slots e = ( page :: H.Slot (Page.Query e) Page.Output Int )
 _page = Proxy :: Proxy "page"
 
 data Query :: forall k. k -> Type -> Type
@@ -84,7 +84,7 @@ data Query e a =
 
 handleQuery :: forall e o m a.
                     Feed e m
-                 => Query e a -> H.HalogenM (FeedState e) (FeedAction e) (FeedSlots e) o m (Maybe a)
+                 => Query e a -> H.HalogenM (FeedState e) (Action e) (Slots e) o m (Maybe a)
 handleQuery (ScrollFeedEffect f) = do
   feed' <- H.getRef (H.RefLabel "feed")
   flip traverse feed' $ \feed -> do
@@ -100,7 +100,7 @@ handleQuery (ScrollFeed o a) = do
     pure a
 
 
-data FeedAction e =
+data Action e =
     InitializeFeed
   | PageOutput Page.Output
   | FeedInsertElement e
@@ -108,7 +108,7 @@ data FeedAction e =
 
 handleAction :: forall e o m .
                     Feed e m
-                 => FeedAction e -> H.HalogenM (FeedState e) (FeedAction e) (FeedSlots e) o m Unit
+                 => Action e -> H.HalogenM (FeedState e) (Action e) (Slots e) o m Unit
 handleAction InitializeFeed = do
   H.getRef (H.RefLabel "feed") >>= traverse_ initializeFeed
   e <- H.lift feedInsert
@@ -172,7 +172,7 @@ handleAction (PageOutput (PageEmpty i)) = do
 
 managePreload :: forall e o m .
                  Feed e m
-              => Element -> H.HalogenM (FeedState e) (FeedAction e) (FeedSlots e) o m Unit
+              => Element -> H.HalogenM (FeedState e) (Action e) (Slots e) o m Unit
 managePreload feed = do
   state <- H.get
   let tooFew = Map.size state.preloaded < state.feedParams.preloadedPages
@@ -189,8 +189,8 @@ managePreload feed = do
 
 mask :: forall e o m .
         Feed e m
-     => H.HalogenM (FeedState e) (FeedAction e) (FeedSlots e) o m Unit 
-     -> H.HalogenM (FeedState e) (FeedAction e) (FeedSlots e) o m Unit 
+     => H.HalogenM (FeedState e) (Action e) (Slots e) o m Unit 
+     -> H.HalogenM (FeedState e) (Action e) (Slots e) o m Unit 
 mask f = do
   lock <- H.gets (\st -> st.lock)
   traverse_ go lock
@@ -201,7 +201,7 @@ mask f = do
 
 loadInitialPage :: forall e o m .
                    Feed e m
-                => Element -> H.HalogenM (FeedState e) (FeedAction e) (FeedSlots e) o m (Page e)
+                => Element -> H.HalogenM (FeedState e) (Action e) (Slots e) o m (Page e)
 loadInitialPage feed = do
   elements <- loadInitialPageElements
   H.lift $ traverse_ onElement elements
@@ -223,10 +223,10 @@ loadPageAbove :: forall e o m .
                  Feed e m
               => Element
               -> Page e
-              -> H.HalogenM (FeedState e) (FeedAction e) (FeedSlots e) o m (Maybe (Page e))
+              -> H.HalogenM (FeedState e) (Action e) (Slots e) o m (Maybe (Page e))
 loadPageAbove feed page = join <$> traverse loadNextPageUp (head page.elements)
   where
-    loadNextPageUp :: e -> H.HalogenM (FeedState e) (FeedAction e) (FeedSlots e) o m (Maybe (Page e))
+    loadNextPageUp :: e -> H.HalogenM (FeedState e) (Action e) (Slots e) o m (Maybe (Page e))
     loadNextPageUp element = do
       params <- H.gets (\st -> st.feedParams)
       above <- H.lift $ feedAbove element
@@ -246,10 +246,10 @@ loadPageBelow :: forall e o m .
                  Feed e m
               => Element
               -> Page e
-              -> H.HalogenM (FeedState e) (FeedAction e) (FeedSlots e) o m (Maybe (Page e))
+              -> H.HalogenM (FeedState e) (Action e) (Slots e) o m (Maybe (Page e))
 loadPageBelow feed page = join <$> traverse loadNextPageUp (last page.elements)
   where
-    loadNextPageUp :: e -> H.HalogenM (FeedState e) (FeedAction e) (FeedSlots e) o m (Maybe (Page e))
+    loadNextPageUp :: e -> H.HalogenM (FeedState e) (Action e) (Slots e) o m (Maybe (Page e))
     loadNextPageUp element = do
       params <- H.gets (\st -> st.feedParams)
       below <- H.lift $ feedBelow element
@@ -265,10 +265,10 @@ loadPageBelow feed page = join <$> traverse loadNextPageUp (last page.elements)
                          , visibleHeight: 0.0
                          }
 
-renderFeed :: forall e m .
+render :: forall e m .
               Feed e m
-           => FeedState e -> H.ComponentHTML (FeedAction e) (FeedSlots e) m
-renderFeed feedState = do
+           => FeedState e -> H.ComponentHTML (Action e) (Slots e) m
+render feedState = do
   HH.div
     [ style do
         width (pct 100.0)
