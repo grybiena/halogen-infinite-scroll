@@ -1,4 +1,4 @@
-module Halogen.Infinite.Scroll (class FeedOrder, feedOrder, class Feed, ScrollFeed(..), element, onElement, feedAbove, feedBelow, feedInsert, feedDelete, FeedParams,defaultFeedParams,component ) where
+module Halogen.Infinite.Scroll (class FeedOrder, feedOrder, class Feed, element, onElement, feedAbove, feedBelow, feedInsert, feedDelete, FeedParams,defaultFeedParams,component ) where
 
 import Prelude hiding (top, bottom)
 
@@ -20,7 +20,6 @@ import Data.Ord (abs)
 import Data.Traversable (sum, traverse, traverse_)
 import Data.Tuple (Tuple(..))
 import Data.Tuple.Nested ((/\))
-import Effect (Effect)
 import Effect.AVar (AVar)
 import Effect.Aff (delay, Milliseconds(..))
 import Effect.Aff.AVar (new, put, tryTake)
@@ -75,12 +74,11 @@ defaultFeedParams e =
   , preloadMillis: 333.3
   }
 
-data ScrollFeed = ScrollFeed (Number -> Effect Unit)
 
-component :: forall e q m .
+component :: forall e q o m .
              Ord e
           => Feed e m
-          => H.Component q (FeedParams e) ScrollFeed m
+          => H.Component q (FeedParams e) o m
 component =
   H.mkComponent
     { initialState: \feedParams ->
@@ -146,18 +144,15 @@ type FeedSlots e = ( page :: H.Slot (PageInsert e) PageOutput Int )
 _page = Proxy :: Proxy "page"
 
 
-handleFeedAction :: forall e m .
+handleFeedAction :: forall e o m .
                     Feed e m
-                 => FeedAction e -> H.HalogenM (FeedState e) (FeedAction e) (FeedSlots e) ScrollFeed m Unit
+                 => FeedAction e -> H.HalogenM (FeedState e) (FeedAction e) (FeedSlots e) o m Unit
 handleFeedAction InitializeFeed = do
   H.getRef (H.RefLabel "feed") >>= traverse_ initializeFeed
   e <- H.lift feedInsert
   traverse_ (\x -> void $ H.subscribe (FeedInsertElement <$> x)) e
   where
     initializeFeed feed = do
-      H.raise $ ScrollFeed $ \n -> do
-        t <- scrollTop feed
-        setScrollTop (t + n) feed
       zerothPage <- loadInitialPage feed
       H.modify_ (\st -> st {
           pages = Map.singleton 0 zerothPage
