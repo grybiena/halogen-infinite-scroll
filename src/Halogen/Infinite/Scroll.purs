@@ -1,54 +1,41 @@
-module Halogen.Infinite.Scroll (class FeedOrder, feedOrder, class Feed, element, onElement, feedAbove, feedBelow, feedInsert, feedDelete, FeedParams,defaultFeedParams,component ) where
+module Halogen.Infinite.Scroll (class Feed, onElement, feedAbove, feedBelow, feedInsert, feedDelete, FeedParams,defaultFeedParams,component ) where
 
 import Prelude hiding (top, bottom)
 
 import CSS (height, marginRight, opacity, paddingRight, pct, position, relative, top, width, zIndex)
-import CSS.Overflow (overflow, overflowY, scroll, hidden, overflowAuto)
+import CSS.Overflow (hidden, overflow, overflowY, scroll)
 import CSS.Size (px)
 import Control.Monad.Free (Free, liftF, runFreeM)
 import Control.Monad.Rec.Class (tailRecM, Step(..))
 import Control.Monad.Resource (Resource, runResource)
 import Control.Monad.State (State, execState, modify_)
-import Data.Array (cons, fold, head, last, null)
+import Data.Array (cons, head, last, null)
 import Data.Array as A
-import Data.List as List
 import Data.Map (Map)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), isJust, maybe)
-import Data.Options ((:=))
 import Data.Ord (abs)
-import Data.Traversable (sum, traverse, traverse_)
+import Data.Traversable (traverse, traverse_)
 import Data.Tuple (Tuple(..))
-import Data.Tuple.Nested ((/\))
 import Effect.AVar (AVar)
 import Effect.Aff (delay, Milliseconds(..))
 import Effect.Aff.AVar (new, put, tryTake)
 import Effect.Aff.Class (class MonadAff)
-import Effect.Class (liftEffect)
 import Halogen as H
 import Halogen.HTML as HH
 import Halogen.HTML.CSS (style)
 import Halogen.HTML.Properties as HP
+import Halogen.Infinite.Scroll.Page (class PageElement, Output(..), Page, PageIntersection, Query(..), pageOrder)
+import Halogen.Infinite.Scroll.Page as Page
+import Halogen.Infinite.Scroll.Page.Find (findPage)
 import Halogen.Subscription as HS
 import Pipes ((>->))
 import Pipes.Core (Producer)
 import Pipes.Prelude as Pipes
-import Prelude as Prelude
 import Type.Proxy (Proxy(..))
 import Web.DOM.Element (Element, scrollTop, setScrollTop)
-import Web.Intersection.Observer (newIntersectionObserver)
-import Web.Intersection.Observer as WIO
-import Web.Intersection.Observer.Entry (IntersectionObserverEntry)
-import Web.Intersection.Observer.Options (root)
-import Web.Resize.Observer (newResizeObserver)
-import Web.Resize.Observer as WRO
-import Web.Resize.Observer.Entry (ResizeObserverEntry)
 
-class (Ord e) <= FeedOrder e where
-  feedOrder :: e -> e -> Ordering
-
-class (FeedOrder e, MonadAff m) <= Feed e m where
-  element :: forall q o . H.Component q e o m
+class (PageElement e m, MonadAff m) <= Feed e m where
   onElement :: e -> m Unit
   feedAbove :: e -> m (Producer e Resource Unit)
   feedBelow :: e -> m (Producer e Resource Unit)
@@ -94,34 +81,6 @@ component =
                                      }
     }
 
-data Pos = Below Int | Inside Int | Above Int
-
-instance Monoid Pos where
-  mempty = Below Prelude.top
-
-instance Semigroup Pos where
-  append (Inside a) _ = Inside a
-  append _ (Inside a) = Inside a
-  append (Below a) (Below b) = Below (min a b)
-  append (Above a) (Above b) = Above (max a b)
-  append (Below a) _ = Inside a
-  append (Above a) _ = Inside a
-
-findBucket :: forall e . FeedOrder e => e -> Map Int (Page e) -> Int
-findBucket e m =
-  case fold $ List.toUnfoldable $ Map.values (bounds <$> m) of
-    Below a -> a
-    Above a -> a
-    Inside a -> a
-  where
-    bounds { id, elements } = 
-      case (head elements /\ last elements) of
-        (Just h /\ Just l)->
-          case (e `feedOrder` h /\ e `feedOrder` l) of
-              (LT /\ _) -> Below id
-              (_ /\ GT) -> Above id
-              _ -> Inside id
-        _ -> Above id
 
 type FeedState e =
   { feedParams :: FeedParams e
@@ -137,10 +96,10 @@ type FeedState e =
 
 data FeedAction e =
     InitializeFeed
-  | PageOutput PageOutput
+  | PageOutput Page.Output
   | FeedInsertElement e
 
-type FeedSlots e = ( page :: H.Slot (PageInsert e) PageOutput Int )
+type FeedSlots e = ( page :: H.Slot (Page.Query e) Page.Output Int )
 _page = Proxy :: Proxy "page"
 
 
@@ -173,7 +132,7 @@ handleFeedAction InitializeFeed = do
 handleFeedAction (FeedInsertElement e) = do
   state <- H.get
   H.lift $ onElement e
-  let b = findBucket e (Map.union state.preloaded state.pages) 
+  let b = findPage e (Map.union state.preloaded state.pages) 
   H.modify_ (insertIntoPage b)
   H.tell _page b (PageInsert e) 
   where
@@ -181,7 +140,7 @@ handleFeedAction (FeedInsertElement e) = do
                              , preloaded = Map.alter insertInto p st.preloaded
                              }
     insertInto Nothing = Nothing
-    insertInto (Just page) = Just (page { elements = A.nub $ A.insertBy feedOrder e page.elements })
+    insertInto (Just page) = Just (page { elements = A.nub $ A.insertBy pageOrder e page.elements })
  
 handleFeedAction (PageOutput (PageHeight {id, height})) = do
   H.modify_ setPageHeight
@@ -418,11 +377,6 @@ loadPageBelow feed page = join <$> traverse loadNextPageUp (last page.elements)
                          , visibleHeight: 0.0
                          }
 
-
-     
-
-
-
 renderFeed :: forall e m .
               Feed e m
            => FeedState e -> H.ComponentHTML (FeedAction e) (FeedSlots e) m
@@ -438,7 +392,7 @@ renderFeed feedState = do
     , renderPreloaded
     ]
   where
-    renderPageSlot (Tuple i page) = HH.slot _page i pageComponent page PageOutput
+    renderPageSlot (Tuple i page) = HH.slot _page i Page.component page PageOutput
     renderLoaded =
       HH.div [ HP.ref (H.RefLabel "feed")
              , style do
@@ -473,97 +427,4 @@ renderFeed feedState = do
              ]
              [ renderPageSlot page
              ]
-
-type Page e =
-  { id :: Int
-  , elements :: Array e
-  , parent :: Element
-  , pageHeight :: Number
-  , visibleHeight :: Number
-  } 
-
-data PageInsert e a =
-  PageInsert e a
-
-data PageAction e =
-    InitializePage
-  | PageResize (Array ResizeObserverEntry)
-  | PageIntersect (Array IntersectionObserverEntry)
-  | PageDeleteElement e
-
-type PageIntersection = {
-      id :: Int
-    , height :: Number
-    } 
-
-
-data PageOutput =
-    PageHeight {
-      id :: Int
-    , height :: Number
-    }
-  | PageIntersection PageIntersection
-  | PageEmpty Int
-
-type PageSlots e = ( pageElement :: forall q o . H.Slot q o e )
-_pageElement = Proxy :: Proxy "pageElement"
-
-pageComponent :: forall e m .
-                 Feed e m
-              => H.Component (PageInsert e) (Page e) PageOutput m
-pageComponent =
-  H.mkComponent
-    { initialState: identity
-    , render: renderPage
-    , eval: H.mkEval $ H.defaultEval { handleAction = pageAction
-                                     , handleQuery = pageInsert
-                                     , initialize = Just InitializePage
-                                     }
-    }
-  where
-    renderPage page =
-      HH.div
-        [ HP.ref (H.RefLabel "page")
-        , style do
-            overflow overflowAuto
-        ] 
-        ((\e -> HH.slot_ _pageElement e element e) <$> page.elements)
-
-    pageInsert :: forall a . PageInsert e a -> H.HalogenM (Page e) (PageAction e) (PageSlots e) PageOutput m (Maybe a)
-    pageInsert (PageInsert e a) = do
-       H.modify_ (\st -> st { elements = A.nub $ A.insertBy feedOrder e st.elements })
-       pure $ Just a
-
-    pageAction :: PageAction e -> H.HalogenM (Page e) (PageAction e) (PageSlots e) PageOutput m Unit
-    pageAction InitializePage = do
-       H.getRef (H.RefLabel "page") >>= traverse_ observe
-       e <- H.lift feedDelete
-       traverse_ (\x -> void $ H.subscribe (PageDeleteElement <$> x)) e
-      where
-        observe page = observeHeight page *> observeIntersection page
-        observeIntersection page = do
-          parent <- H.gets (\p -> p.parent)
-          { emitter, listener } <- H.liftEffect HS.create
-          void $ H.subscribe emitter
-          io <- H.liftEffect $ newIntersectionObserver
-                                (\a _ -> HS.notify listener (PageIntersect a))
-                                (root := parent)
-          liftEffect $ WIO.observe io page
-        observeHeight page = do
-          { emitter, listener } <- H.liftEffect HS.create
-          void $ H.subscribe emitter
-          ro <- H.liftEffect $ newResizeObserver (\a _ -> HS.notify listener (PageResize a))
-          liftEffect $ WRO.observe ro page
-    pageAction (PageResize o) = do
-      pageId <- H.gets (\page -> page.id)
-      let h = sum ((\e -> e.contentRect.height) <$> o)
-      H.raise (PageHeight { id: pageId, height: h })
-    pageAction (PageIntersect o) = do
-      let h = sum ((\e -> e.intersectionRect.height) <$> o)
-      pageId <- H.gets (\page -> page.id)      
-      H.modify_ (\st -> st { visibleHeight = h})
-      H.raise (PageIntersection { id: pageId, height: h })
-    pageAction (PageDeleteElement e) = do
-      state <- H.modify (\st -> st { elements = A.delete e st.elements })
-      when (null state.elements) $ H.raise (PageEmpty state.id)
-    
+   
