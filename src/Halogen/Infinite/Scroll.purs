@@ -11,14 +11,16 @@ import Control.Monad.State (execState)
 import Data.Array (cons, head, last, null)
 import Data.Array as A
 import Data.Map as Map
-import Data.Maybe (Maybe(..), isJust, maybe)
+import Data.Maybe (Maybe(..), maybe)
 import Data.Ord (abs)
 import Data.Traversable (traverse, traverse_)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
 import Effect.Aff (delay, Milliseconds(..))
-import Effect.Aff.AVar (new, put, tryTake)
+import Effect.Aff.AVar (new)
 import Effect.Aff.Class (class MonadAff)
+import Effect.Console (log)
+import Halogen (SubscriptionId)
 import Halogen as H
 import Halogen.HTML as HH
 import Halogen.HTML.CSS (style)
@@ -35,6 +37,8 @@ import Pipes.Core (Producer)
 import Pipes.Prelude as Pipes
 import Type.Proxy (Proxy(..))
 import Web.DOM.Element (Element, scrollTop, setScrollTop)
+import Web.HTML (window)
+import Web.HTML.Window (requestIdleCallback)
 
 class (PageElement e m, MonadAff m) <= Feed e m where
   onElement :: e -> m Unit
@@ -102,6 +106,8 @@ handleQuery (ScrollFeed o a) = do
 
 data Action e =
     InitializeFeed
+--  | AnimationFrame SubscriptionId
+  | IdleCallback SubscriptionId 
   | PageOutput Page.Output
   | FeedInsertElement e
 
@@ -113,6 +119,13 @@ handleAction InitializeFeed = do
   H.getRef (H.RefLabel "feed") >>= traverse_ initializeFeed
   e <- H.lift feedInsert
   traverse_ (\x -> void $ H.subscribe (FeedInsertElement <$> x)) e
+
+  { emitter, listener } <- H.liftEffect HS.create
+  j <- H.subscribe emitter
+  void $ H.liftEffect $ window >>= requestIdleCallback {timeout: 500} (HS.notify listener (IdleCallback j))
+
+  pure unit
+
   where
     initializeFeed feed = do
       zerothPage <- loadInitialPage feed
@@ -153,19 +166,34 @@ handleAction (PageOutput (PageHeight {id, height})) = do
                           }
     setHeight Nothing = Nothing
     setHeight (Just page) = Just (page { pageHeight = height })
-handleAction (PageOutput (PageIntersection page)) = mask do
-  feed' <- H.getRef (H.RefLabel "feed")
-  flip traverse_ feed' $ \feed -> do  
-    st <- H.modify (\st -> execState (stateUpdate (computeUpdate st page)) st) 
-    t <- H.liftEffect $ scrollTop feed
-    H.liftEffect $ traverse_ (\o -> setScrollTop (t + o) feed) st.update.scroll
-    H.modify_ (\s -> s { update = { topLoad: Nothing, bottomLoad: Nothing, scroll: Nothing } })
-    flip traverse_ st.update.topLoad $ \kv -> do
-      a <- loadPageAbove feed kv.value
-      traverse_ (\p -> H.modify_ (\s -> s { preloaded = Map.insert p.id p st.preloaded } )) a
-    flip traverse_ st.update.bottomLoad $ \kv -> do
-      a <- loadPageBelow feed kv.value
-      traverse_ (\p -> H.modify_ (\s -> s { pages = Map.insert p.id p s.pages } )) a
+handleAction (PageOutput (PageIntersection { id, height })) = do
+  let setIntersection Nothing = Nothing
+      setIntersection (Just page) = Just (page { visibleHeight = height })
+  H.modify_ (\st -> st {
+      pages = Map.alter setIntersection id st.pages
+    })
+
+handleAction (IdleCallback e) = do
+    H.unsubscribe e
+    feed' <- H.getRef (H.RefLabel "feed")
+    flip traverse_ feed' $ \feed -> do  
+      st <- H.modify (\st -> execState (stateUpdate (computeUpdate st)) st) 
+      H.modify_ (\s -> s { update = { topLoad: Nothing, bottomLoad: Nothing, scroll: Nothing } })
+      t <- H.liftEffect $ scrollTop feed
+      H.liftEffect $ traverse_ (\o -> log (show t <> " + " <> show o) *> setScrollTop (t + o) feed) st.update.scroll
+      let update = (execState (stateUpdate (computeUpdate st)) st).update
+      flip traverse_ update.topLoad $ \kv -> do
+        a <- loadPageAbove feed kv.value
+        traverse_ (\p -> H.modify_ (\s -> s { preloaded = Map.insert p.id p s.preloaded } )) a
+      flip traverse_ update.bottomLoad $ \kv -> do
+        a <- loadPageBelow feed kv.value
+        traverse_ (\p -> H.modify_ (\s -> s { pages = Map.insert p.id p s.pages } )) a
+    H.liftAff $ delay (Milliseconds 500.0)
+    { emitter, listener } <- H.liftEffect HS.create
+    j <- H.subscribe emitter
+    void $ H.liftEffect $ window >>= requestIdleCallback {timeout: 500} (HS.notify listener (IdleCallback j))
+
+
 
 handleAction (PageOutput (PageEmpty i)) = do
   H.modify_ (\st -> st { pages = Map.delete i st.pages })
@@ -186,18 +214,6 @@ managePreload feed = do
                                             (\kv -> Map.delete kv.key st.preloaded)
                                             (Map.findMin st.preloaded)
                          })
-
-mask :: forall e o m .
-        Feed e m
-     => H.HalogenM (FeedState e) (Action e) (Slots e) o m Unit 
-     -> H.HalogenM (FeedState e) (Action e) (Slots e) o m Unit 
-mask f = do
-  lock <- H.gets (\st -> st.lock)
-  traverse_ go lock
-  where
-    go lock = do
-        free <- H.liftAff $ tryTake lock
-        when (isJust free) (f *> (H.liftAff $ put unit lock))
 
 loadInitialPage :: forall e o m .
                    Feed e m

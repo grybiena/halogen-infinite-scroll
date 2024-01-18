@@ -1,4 +1,4 @@
-module Halogen.Infinite.Scroll.State (FeedState(..)) where
+module Halogen.Infinite.Scroll.State (FeedState(..),UpdateAction) where
 
 import Prelude hiding (top, bottom)
 
@@ -13,11 +13,11 @@ type FeedState e =
   , pages :: Map Int (Page e)
   , preloaded :: Map Int (Page e)
   , lock :: Maybe (AVar Unit)
-  , update :: {
+  , update :: UpdateAction e 
+  }
+
+type UpdateAction e = {
         topLoad :: Maybe { key :: Int, value :: Page e }
       , bottomLoad :: Maybe { key :: Int, value :: Page e }
       , scroll :: Maybe Number
       }
-  }
-
-

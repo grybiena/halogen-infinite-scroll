@@ -9,7 +9,7 @@ import Data.Map as Map
 import Data.Maybe (Maybe(..))
 import Data.Traversable (traverse_)
 import Data.Tuple (Tuple(..))
-import Halogen.Infinite.Scroll.Page (Page, PageIntersection)
+import Halogen.Infinite.Scroll.Page (Page)
 
 
 data UpdateF e a =
@@ -19,7 +19,6 @@ data UpdateF e a =
   | TopDelete { key :: Int, value :: Page e } a 
   | BottomLoad { key :: Int, value :: Page e } a
   | BottomDelete { key :: Int, value :: Page e } a
-  | UpdateIntersection PageIntersection a
 
 instance Functor (UpdateF e) where
   map f (TopShift page a) = TopShift page (f a)
@@ -28,7 +27,6 @@ instance Functor (UpdateF e) where
   map f (TopDelete page a) = TopDelete page (f a)
   map f (BottomLoad page a) = BottomLoad page (f a)
   map f (BottomDelete page a) = BottomDelete page (f a)
-  map f (UpdateIntersection page a) = UpdateIntersection page (f a)
 
 type Update e = Free (UpdateF e)
 
@@ -50,8 +48,6 @@ bottomLoad page = liftF $ BottomLoad page unit
 bottomDelete :: forall e. { key :: Int, value :: Page e } -> Update e Unit
 bottomDelete page = liftF $ BottomDelete page unit
 
-updateIntersection :: forall e. PageIntersection -> Update e Unit
-updateIntersection page = liftF $ UpdateIntersection page unit
 
 stateUpdate :: forall e. Update e Unit -> State (FeedState e) Unit
 stateUpdate f = do
@@ -98,27 +94,20 @@ stateUpdate f = do
         , update = st.update { bottomLoad = Nothing }
         })
       pure a 
-    go (UpdateIntersection { id, height } a) = do 
-      let setIntersection Nothing = Nothing
-          setIntersection (Just page) = Just (page { visibleHeight = height })
-      modify_ (\st -> st {
-          pages = Map.alter setIntersection id st.pages
-        })
-      pure a
+
     
-computeUpdate :: forall e. FeedState e -> PageIntersection -> Update e Unit
-computeUpdate { feedParams, pages, preloaded } page = 
+computeUpdate :: forall e. FeedState e -> Update e Unit
+computeUpdate { feedParams, pages, preloaded } = 
   let notVisible (Tuple _ p) = p.visibleHeight == 0.0 
       extraAbove = A.length $ A.takeWhile notVisible $ Map.toUnfoldable pages
       tooFewAbove = extraAbove < feedParams.hiddenPages
-      tooManyAbove = extraAbove > feedParams.hiddenPages
+      tooManyAbove = extraAbove > 1 + feedParams.hiddenPages
       tooFewPreload = Map.size preloaded < feedParams.preloadedPages 
-      tooManyPreload = Map.size preloaded > feedParams.preloadedPages 
+      tooManyPreload = Map.size preloaded > 1 + feedParams.preloadedPages 
       extraBelow = A.length $ A.takeWhile notVisible $ A.reverse $ Map.toUnfoldable pages
       tooFewBelow = extraBelow < feedParams.hiddenPages
-      tooManyBelow = extraBelow > feedParams.hiddenPages
+      tooManyBelow = extraBelow > 1 + feedParams.hiddenPages
    in do
-    updateIntersection page
     when (feedParams.enableTop && tooFewAbove) $ traverse_ topShift (Map.findMax preloaded)
     when (feedParams.enableTop && tooManyAbove) $ traverse_ topUnshift (Map.findMin pages)
     when (feedParams.enableTop && tooFewPreload) $ traverse_ topLoad (Map.findMin preloaded)
