@@ -1,23 +1,20 @@
-module Halogen.Infinite.Scroll (class Feed, onElement, feedAbove, feedBelow, feedInsert, feedDelete, FeedParams,defaultFeedParams,component ) where
+module Halogen.Infinite.Scroll (class Feed, onElement, feedAbove, feedBelow, feedInsert, feedDelete, defaultFeedOptions,component ) where
 
 import Prelude hiding (top, bottom)
 
 import CSS (height, marginRight, opacity, paddingRight, pct, position, relative, top, width, zIndex)
 import CSS.Overflow (hidden, overflow, overflowY, scroll)
 import CSS.Size (px)
-import Control.Monad.Free (Free, liftF, runFreeM)
 import Control.Monad.Rec.Class (tailRecM, Step(..))
 import Control.Monad.Resource (Resource, runResource)
-import Control.Monad.State (State, execState, modify_)
+import Control.Monad.State (execState)
 import Data.Array (cons, head, last, null)
 import Data.Array as A
-import Data.Map (Map)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), isJust, maybe)
 import Data.Ord (abs)
 import Data.Traversable (traverse, traverse_)
 import Data.Tuple (Tuple(..))
-import Effect.AVar (AVar)
 import Effect.Aff (delay, Milliseconds(..))
 import Effect.Aff.AVar (new, put, tryTake)
 import Effect.Aff.Class (class MonadAff)
@@ -25,9 +22,12 @@ import Halogen as H
 import Halogen.HTML as HH
 import Halogen.HTML.CSS (style)
 import Halogen.HTML.Properties as HP
-import Halogen.Infinite.Scroll.Page (class PageElement, Output(..), Page, PageIntersection, Query(..), pageOrder)
+import Halogen.Infinite.Scroll.Options (FeedOptions)
+import Halogen.Infinite.Scroll.Page (class PageElement, Output(..), Page, Query(..), pageOrder)
 import Halogen.Infinite.Scroll.Page as Page
 import Halogen.Infinite.Scroll.Page.Find (findPage)
+import Halogen.Infinite.Scroll.State (FeedState)
+import Halogen.Infinite.Scroll.Update (computeUpdate, stateUpdate)
 import Halogen.Subscription as HS
 import Pipes ((>->))
 import Pipes.Core (Producer)
@@ -42,17 +42,8 @@ class (PageElement e m, MonadAff m) <= Feed e m where
   feedInsert :: m (Maybe (HS.Emitter e))
   feedDelete :: m (Maybe (HS.Emitter e))
 
-type FeedParams e =
-  { initialElement :: e
-  , pageSize :: Int
-  , hiddenPages :: Int
-  , preloadedPages :: Int
-  , enableTop :: Boolean
-  , preloadMillis :: Number
-  }
-
-defaultFeedParams :: forall e . e -> FeedParams e
-defaultFeedParams e = 
+defaultFeedOptions :: forall e . e -> FeedOptions e
+defaultFeedOptions e = 
   { initialElement: e
   , pageSize: 10
   , hiddenPages: 3
@@ -65,7 +56,7 @@ defaultFeedParams e =
 component :: forall e q o m .
              Ord e
           => Feed e m
-          => H.Component q (FeedParams e) o m
+          => H.Component q (FeedOptions e) o m
 component =
   H.mkComponent
     { initialState: \feedParams ->
@@ -81,18 +72,6 @@ component =
                                      }
     }
 
-
-type FeedState e =
-  { feedParams :: FeedParams e
-  , pages :: Map Int (Page e)
-  , preloaded :: Map Int (Page e)
-  , lock :: Maybe (AVar Unit)
-  , update :: {
-        topLoad :: Maybe { key :: Int, value :: Page e }
-      , bottomLoad :: Maybe { key :: Int, value :: Page e }
-      , scroll :: Maybe Number
-      }
-  }
 
 data FeedAction e =
     InitializeFeed
@@ -183,121 +162,6 @@ managePreload feed = do
                                             (\kv -> Map.delete kv.key st.preloaded)
                                             (Map.findMin st.preloaded)
                          })
-
-data UpdateF e a =
-    TopShift { key :: Int, value :: Page e } a 
-  | TopUnshift { key :: Int, value :: Page e } a
-  | TopLoad { key :: Int, value :: Page e } a
-  | TopDelete { key :: Int, value :: Page e } a 
-  | BottomLoad { key :: Int, value :: Page e } a
-  | BottomDelete { key :: Int, value :: Page e } a
-  | UpdateIntersection PageIntersection a
-
-instance Functor (UpdateF e) where
-  map f (TopShift page a) = TopShift page (f a)
-  map f (TopUnshift page a) = TopUnshift page (f a)
-  map f (TopLoad page a) = TopLoad page (f a)
-  map f (TopDelete page a) = TopDelete page (f a)
-  map f (BottomLoad page a) = BottomLoad page (f a)
-  map f (BottomDelete page a) = BottomDelete page (f a)
-  map f (UpdateIntersection page a) = UpdateIntersection page (f a)
-
-type Update e = Free (UpdateF e)
-
-topShift :: forall e. { key :: Int, value :: Page e } -> Update e Unit
-topShift page = liftF $ TopShift page unit
-
-topUnshift :: forall e. { key :: Int, value :: Page e } -> Update e Unit
-topUnshift page = liftF $ TopUnshift page unit
-
-topLoad :: forall e. { key :: Int, value :: Page e } -> Update e Unit
-topLoad page = liftF $ TopLoad page unit
-
-topDelete :: forall e. { key :: Int, value :: Page e } -> Update e Unit
-topDelete page = liftF $ TopDelete page unit
- 
-bottomLoad :: forall e. { key :: Int, value :: Page e } -> Update e Unit
-bottomLoad page = liftF $ BottomLoad page unit
-
-bottomDelete :: forall e. { key :: Int, value :: Page e } -> Update e Unit
-bottomDelete page = liftF $ BottomDelete page unit
-
-updateIntersection :: forall e. PageIntersection -> Update e Unit
-updateIntersection page = liftF $ UpdateIntersection page unit
-
-stateUpdate :: forall e. Update e Unit -> State (FeedState e) Unit
-stateUpdate f = do
-  modify_ (\st -> st { update = st.update { scroll = Nothing } })
-  runFreeM go f
-  where
-    go (TopShift page a) = do 
-      modify_ (\st -> st { 
-          pages = Map.insert page.key page.value st.pages 
-        , preloaded = Map.delete page.key st.preloaded
-        , update = st.update { scroll = Just page.value.pageHeight }
-        } )
-      pure a
-    go (TopUnshift page a) = do
-      modify_ (\st -> st { 
-          pages = Map.delete page.key st.pages
-        , preloaded = Map.insert page.key page.value st.preloaded
-        , update = st.update { scroll = Just (-page.value.pageHeight) }
-        })
-      pure a
-    go (TopLoad page a) = do
-      modify_ (\st -> st {
-          update = if ((\u -> u.key) <$> st.update.topLoad) == Just page.key
-                     then st.update { topLoad = Nothing }
-                     else st.update { topLoad = Just page }
-        })
-      pure a
-    go (TopDelete page a) = do 
-      modify_ (\st -> st {
-          preloaded = Map.delete page.key st.preloaded
-        , update = st.update { topLoad = Nothing }
-        })
-      pure a
-    go (BottomLoad page a) = do
-      modify_ (\st -> st {
-          update = if ((\u -> u.key) <$> st.update.bottomLoad) == Just page.key
-                     then st.update { bottomLoad = Nothing }
-                     else st.update { bottomLoad = Just page }
-        })
-      pure a
-    go (BottomDelete page a) = do 
-      modify_ (\st -> st {
-          pages = Map.delete page.key st.pages
-        , update = st.update { bottomLoad = Nothing }
-        })
-      pure a 
-    go (UpdateIntersection { id, height } a) = do 
-      let setIntersection Nothing = Nothing
-          setIntersection (Just page) = Just (page { visibleHeight = height })
-      modify_ (\st -> st {
-          pages = Map.alter setIntersection id st.pages
-        })
-      pure a
-    
-computeUpdate :: forall e. FeedState e -> PageIntersection -> Update e Unit
-computeUpdate { feedParams, pages, preloaded } page = 
-  let notVisible (Tuple _ p) = p.visibleHeight == 0.0 
-      extraAbove = A.length $ A.takeWhile notVisible $ Map.toUnfoldable pages
-      tooFewAbove = extraAbove < feedParams.hiddenPages
-      tooManyAbove = extraAbove > feedParams.hiddenPages
-      tooFewPreload = Map.size preloaded < feedParams.preloadedPages 
-      tooManyPreload = Map.size preloaded > feedParams.preloadedPages 
-      extraBelow = A.length $ A.takeWhile notVisible $ A.reverse $ Map.toUnfoldable pages
-      tooFewBelow = extraBelow < feedParams.hiddenPages
-      tooManyBelow = extraBelow > feedParams.hiddenPages
-   in do
-    updateIntersection page
-    when (feedParams.enableTop && tooFewAbove) $ traverse_ topShift (Map.findMax preloaded)
-    when (feedParams.enableTop && tooManyAbove) $ traverse_ topUnshift (Map.findMin pages)
-    when (feedParams.enableTop && tooFewPreload) $ traverse_ topLoad (Map.findMin preloaded)
-    when (feedParams.enableTop && tooManyPreload) $ traverse_ topDelete (Map.findMin preloaded)
-    when tooFewBelow $ traverse_ bottomLoad (Map.findMax pages)
-    when tooManyBelow $ traverse_ bottomDelete (Map.findMax pages)
-
 
 mask :: forall e o m .
         Feed e m
