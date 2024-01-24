@@ -28,7 +28,7 @@ import Halogen.Infinite.Scroll.Page (class PageElement, Output(..), Page, pageOr
 import Halogen.Infinite.Scroll.Page as Page
 import Halogen.Infinite.Scroll.Page.Find (findPage)
 import Halogen.Infinite.Scroll.State (FeedState)
-import Halogen.Infinite.Scroll.Update (computeUpdate, stateUpdate)
+import Halogen.Infinite.Scroll.Update (computeUpdate, stateUpdate, updateIntersection)
 import Halogen.Subscription as HS
 import Pipes ((>->))
 import Pipes.Core (Producer)
@@ -47,17 +47,19 @@ defaultFeedOptions :: forall e . e -> FeedOptions e
 defaultFeedOptions e = 
   { initialElement: e
   , pageSize: 10
-  , hiddenPages: 3
-  , preloadedPages: 3 
+  , hiddenPages: 6
+  , preloadedPages: 6 
+  , deadZone: 2
+  , debounce: Milliseconds 333.0
   , enableTop: false 
   , preloadMillis: 333.3
   }
 
 
-component :: forall e o m .
+component :: forall e m .
              Ord e
           => Feed e m
-          => H.Component (Query e) (FeedOptions e) o m
+          => H.Component (Query e) (FeedOptions e) (FeedState e) m
 component =
   H.mkComponent
     { initialState: \feedParams ->
@@ -82,6 +84,8 @@ data Query e a =
     ScrollFeedEffect ((Number -> Effect Unit) -> a)
   | ScrollFeed Number a
   | GetScrollTop (Number -> a)
+
+
 
 handleQuery :: forall e o m a.
                     Feed e m
@@ -113,9 +117,9 @@ data Action e =
   | FeedInsertElement e
 
 
-handleAction :: forall e o m .
+handleAction :: forall e m .
                     Feed e m
-                 => Action e -> H.HalogenM (FeedState e) (Action e) (Slots e) o m Unit
+                 => Action e -> H.HalogenM (FeedState e) (Action e) (Slots e) (FeedState e) m Unit
 handleAction InitializeFeed = do
   H.getRef (H.RefLabel "feed") >>= traverse_ initializeFeed
   e <- H.lift feedInsert
@@ -160,19 +164,24 @@ handleAction (PageOutput (PageHeight {id, height})) = do
                           }
     setHeight Nothing = Nothing
     setHeight (Just page) = Just (page { pageHeight = height })
-handleAction (PageOutput (PageIntersection page)) = mask do
-  feed' <- H.getRef (H.RefLabel "feed")
-  flip traverse_ feed' $ \feed -> do  
-    st <- H.modify (\st -> execState (stateUpdate (computeUpdate st page)) st) 
-    t <- H.liftEffect $ scrollTop feed
-    H.liftEffect $ traverse_ (\o -> setScrollTop (t + o) feed) st.update.scroll
-    H.modify_ (\s -> s { update = { topLoad: Nothing, bottomLoad: Nothing, scroll: Nothing } })
-    flip traverse_ st.update.topLoad $ \kv -> do
-      a <- loadPageAbove feed kv.value
-      traverse_ (\p -> H.modify_ (\s -> s { preloaded = Map.insert p.id p st.preloaded } )) a
-    flip traverse_ st.update.bottomLoad $ \kv -> do
-      a <- loadPageBelow feed kv.value
-      traverse_ (\p -> H.modify_ (\s -> s { pages = Map.insert p.id p s.pages } )) a
+handleAction (PageOutput (PageIntersection page)) = do
+  H.modify_ (\st -> execState (stateUpdate (updateIntersection page)) st)
+  mask do
+    feed' <- H.getRef (H.RefLabel "feed")
+    flip traverse_ feed' $ \feed -> do  
+      t <- H.liftEffect $ scrollTop feed
+      st <- H.modify (\st -> execState (stateUpdate (computeUpdate st page)) st) 
+      H.liftEffect $ traverse_ (\o -> setScrollTop (t + o) feed) st.update.scroll
+      H.raise st
+      H.modify_ (\s -> s { update = { topLoad: Nothing, bottomLoad: Nothing, scroll: Nothing } })
+      flip traverse_ st.update.topLoad $ \kv -> do
+        a <- loadPageAbove feed kv.value
+        traverse_ (\p -> H.modify_ (\s -> s { preloaded = Map.insert p.id p st.preloaded } )) a
+      flip traverse_ st.update.bottomLoad $ \kv -> do
+        a <- loadPageBelow feed kv.value
+        traverse_ (\p -> H.modify_ (\s -> s { pages = Map.insert p.id p s.pages } )) a
+      H.liftAff $ delay st.feedParams.debounce
+
 
 handleAction (PageOutput (PageEmpty i)) = do
   H.modify_ (\st -> st { pages = Map.delete i st.pages })

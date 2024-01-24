@@ -1,15 +1,17 @@
-module Halogen.Infinite.Scroll.Update (Update,UpdateF(..),stateUpdate,computeUpdate) where
+module Halogen.Infinite.Scroll.Update (Update,UpdateF(..),stateUpdate,computeUpdate,updateIntersection) where
 
 import Prelude hiding (top, bottom)
-import Halogen.Infinite.Scroll.State (FeedState)
+
 import Control.Monad.Free (Free, liftF, runFreeM)
 import Control.Monad.State (State, modify_)
 import Data.Array as A
+import Data.Foldable (maximum)
 import Data.Map as Map
-import Data.Maybe (Maybe(..))
+import Data.Maybe (Maybe(..), maybe)
 import Data.Traversable (traverse_)
 import Data.Tuple (Tuple(..))
 import Halogen.Infinite.Scroll.Page (Page, PageIntersection)
+import Halogen.Infinite.Scroll.State (FeedState)
 
 
 data UpdateF e a =
@@ -108,15 +110,15 @@ stateUpdate f = do
     
 computeUpdate :: forall e. FeedState e -> PageIntersection -> Update e Unit
 computeUpdate { feedParams, pages, preloaded } page = 
-  let notVisible (Tuple _ p) = p.visibleHeight == 0.0 
+  let notVisible (Tuple _ p) = p.visibleHeight < max 1.0 (maybe 0.0 identity (maximum ((\q -> q.visibleHeight) <$> pages)))
       extraAbove = A.length $ A.takeWhile notVisible $ Map.toUnfoldable pages
-      tooFewAbove = extraAbove < feedParams.hiddenPages
-      tooManyAbove = extraAbove > feedParams.hiddenPages
-      tooFewPreload = Map.size preloaded < feedParams.preloadedPages 
-      tooManyPreload = Map.size preloaded > feedParams.preloadedPages 
+      tooFewAbove = extraAbove < (feedParams.hiddenPages - feedParams.deadZone)
+      tooManyAbove = extraAbove > (feedParams.hiddenPages + feedParams.deadZone)
+      tooFewPreload = Map.size preloaded < (feedParams.preloadedPages - feedParams.deadZone) 
+      tooManyPreload = Map.size preloaded > (feedParams.preloadedPages + feedParams.deadZone) 
       extraBelow = A.length $ A.takeWhile notVisible $ A.reverse $ Map.toUnfoldable pages
-      tooFewBelow = extraBelow < feedParams.hiddenPages
-      tooManyBelow = extraBelow > feedParams.hiddenPages
+      tooFewBelow = extraBelow < (feedParams.hiddenPages - feedParams.deadZone)
+      tooManyBelow = extraBelow > (feedParams.hiddenPages + feedParams.deadZone)
    in do
     updateIntersection page
     when (feedParams.enableTop && tooFewAbove) $ traverse_ topShift (Map.findMax preloaded)
