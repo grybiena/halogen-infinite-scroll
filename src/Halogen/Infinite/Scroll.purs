@@ -81,6 +81,7 @@ data Query :: forall k. k -> Type -> Type
 data Query e a =
     ScrollFeedEffect ((Number -> Effect Unit) -> a)
   | ScrollFeed Number a
+  | GetScrollTop (Number -> a)
 
 handleQuery :: forall e o m a.
                     Feed e m
@@ -98,6 +99,12 @@ handleQuery (ScrollFeed o a) = do
     t <- scrollTop feed
     setScrollTop (t + o) feed
     pure a
+handleQuery (GetScrollTop a) = do
+  feed' <- H.getRef (H.RefLabel "feed")
+  flip traverse feed' $ \feed -> H.liftEffect do
+    t <- scrollTop feed
+    pure (a t)
+
 
 
 data Action e =
