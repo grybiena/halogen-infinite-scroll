@@ -3,3 +3,5 @@ node_modules
 result
 .direnv
 .psc-ide-port
+/.spago/
+/spago.lock
